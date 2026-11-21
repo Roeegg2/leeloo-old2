@@ -44,6 +44,18 @@ qemu-iso: edk2-ovmf
         {{qemu_flags}} \
          | sed -u 's/\x1b\[[0-9;?]*[A-Za-z]//g'
 
+qemu-debug: edk2-ovmf
+    qemu-system-x86_64 \
+        -M q35 \
+        -drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
+        -cdrom {{image_name}}.iso \
+        -serial stdio \
+        {{qemu_flags}} \
+        -s -S \
+        -d int,cpu_reset,guest_errors -D qemu.log \
+        -no-reboot -no-shutdown \
+        -accel tcg
+
 run: iso qemu-iso
 
 run-hdd: edk2-ovmf hdd
@@ -55,24 +67,26 @@ run-hdd: edk2-ovmf hdd
         {{qemu_flags}}
 
 build:
-    RUSTFLAGS="-C relocation-model=static" cargo build --target x86_64-unknown-none --profile {{rust_profile}}
+    RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo build --target x86_64-unknown-none --profile {{rust_profile}}
     cp "target/x86_64-unknown-none/{{profile_subdir}}/leeloo" kernel
 
-debug:
-    RUSTFLAGS="-C relocation-model=static" cargo build --target x86_64-unknown-none --profile dev
+debug-build:
+    RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo build --target x86_64-unknown-none --profile dev
     cp "target/x86_64-unknown-none/debug/leeloo" kernel
+
+debug: iso qemu-debug
 
 check:
     cargo check --target x86_64-unknown-none
 
 test-build:
-    RUSTFLAGS="-C relocation-model=static" cargo test --target x86_64-unknown-none --no-run
+    RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo test --target x86_64-unknown-none --no-run
     test_binary=$(find target/x86_64-unknown-none/debug/build/leeloo -type f -executable -name 'leeloo-*' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-) && test -n "$test_binary" && cp "$test_binary" kernel
 
 test: limine test-build package-iso qemu-iso
 
 clippy:
-    RUSTFLAGS="-C relocation-model=static" cargo clippy --target x86_64-unknown-none -- -D warnings
+    RUSTFLAGS="-C relocation-model=static -C force-frame-pointers=yes" cargo clippy --target x86_64-unknown-none -- -D warnings
 
 fmt:
     cargo fmt --all

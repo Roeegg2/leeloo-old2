@@ -6,6 +6,7 @@
 
 pub mod arch;
 
+use arch::x86_64::gdt;
 use arch::x86_64::serial::Serial;
 
 use core::arch::asm;
@@ -39,6 +40,9 @@ unsafe extern "C" fn kmain() -> ! {
     // removed by the linker.
     assert!(BASE_REVISION.is_supported());
 
+    unsafe {
+        gdt::init_gdt();
+    }
     Serial::init();
 
     kprintln!("Hello, World!");

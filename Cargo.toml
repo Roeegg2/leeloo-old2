@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 limine = "0.5"
+spin = "0.12.3"
+
+[profile.dev]
+debug = true
 
 [[bin]]
 name = "leeloo"

@@ -2,6 +2,7 @@ use core::arch::asm;
 
 #[macro_use]
 pub mod serial;
+pub mod gdt;
 
 #[inline(always)]
 unsafe fn outb(port: u16, value: u8) {

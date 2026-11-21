@@ -35,6 +35,7 @@
           pkgs.gdb
           pkgs.mtools
           pkgs.gptfdisk
+          pkgs.rust-analyzer
         ];
       };
     };

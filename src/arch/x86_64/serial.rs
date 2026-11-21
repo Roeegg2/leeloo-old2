@@ -68,7 +68,7 @@ impl Write for Serial {
 macro_rules! kprintln {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let mut s = Serial;
+        let mut s = $crate::Serial;
         let _ = writeln!(s, $($arg)*);
     }};
 }

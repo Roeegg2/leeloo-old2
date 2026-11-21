@@ -5,3 +5,4 @@ kernel
 /edk2-ovmf
 *.iso
 *.hdd
+qemu.log
