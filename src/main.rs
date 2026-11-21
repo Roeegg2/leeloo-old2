@@ -1,7 +1,10 @@
 #![no_std]
 #![no_main]
+#![feature(custom_test_frameworks)]
+#![test_runner(crate::test_runner)]
+#![reexport_test_harness_main = "test_main"]
 
-mod arch;
+pub mod arch;
 
 use arch::x86_64::serial::Serial;
 
@@ -40,7 +43,41 @@ unsafe extern "C" fn kmain() -> ! {
 
     kprintln!("Hello, World!");
 
+    #[cfg(test)]
+    test_main();
+
     hcf();
+}
+
+pub trait Testable {
+    fn run(&self);
+}
+
+impl<T> Testable for T
+where
+    T: Fn(),
+{
+    fn run(&self) {
+        kprintln!("{}...", core::any::type_name::<T>());
+        self();
+        kprintln!("[ok]");
+    }
+}
+
+pub fn test_runner(tests: &[&dyn Testable]) {
+    kprintln!("Running {} tests", tests.len());
+    for test in tests {
+        test.run();
+    }
+    kprintln!("Tests passed");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test_case]
+    fn trivial_assertion() {
+        assert_eq!(1, 1);
+    }
 }
 
 #[panic_handler]

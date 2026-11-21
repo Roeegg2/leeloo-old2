@@ -18,5 +18,3 @@ unsafe fn inb(port: u16) -> u8 {
         ret as _
     }
 }
-
-// 1, 3, 0, 2, 4

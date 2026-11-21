@@ -8,7 +8,7 @@ profile_subdir := if rust_profile == "dev" { "debug" } else { rust_profile }
 default:
     just iso
 
-iso: limine build
+package-iso:
     rm -rf iso_root
     mkdir -p iso_root/boot iso_root/boot/limine iso_root/EFI/BOOT
     cp -v kernel iso_root/boot/
@@ -22,6 +22,8 @@ iso: limine build
         iso_root -o {{image_name}}.iso
     rm -rf iso_root
 
+iso: limine build package-iso
+
 hdd: limine build
     rm -f {{image_name}}.hdd
     dd if=/dev/zero bs=1M count=0 seek=64 of={{image_name}}.hdd
@@ -33,7 +35,7 @@ hdd: limine build
     mcopy -i {{image_name}}.hdd@@1M limine/BOOTX64.EFI ::/EFI/BOOT
     mcopy -i {{image_name}}.hdd@@1M limine/BOOTIA32.EFI ::/EFI/BOOT
 
-run: edk2-ovmf iso
+qemu-iso: edk2-ovmf
     qemu-system-x86_64 \
         -M q35 \
         -drive if=pflash,unit=0,format=raw,file=edk2-ovmf/ovmf-code-x86_64.fd,readonly=on \
@@ -41,6 +43,8 @@ run: edk2-ovmf iso
         -serial stdio \
         {{qemu_flags}} \
          | sed -u 's/\x1b\[[0-9;?]*[A-Za-z]//g'
+
+run: iso qemu-iso
 
 run-hdd: edk2-ovmf hdd
     qemu-system-x86_64 \
@@ -60,6 +64,12 @@ debug:
 
 check:
     cargo check --target x86_64-unknown-none
+
+test-build:
+    RUSTFLAGS="-C relocation-model=static" cargo test --target x86_64-unknown-none --no-run
+    test_binary=$(find target/x86_64-unknown-none/debug/build/leeloo -type f -executable -name 'leeloo-*' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-) && test -n "$test_binary" && cp "$test_binary" kernel
+
+test: limine test-build package-iso qemu-iso
 
 clippy:
     RUSTFLAGS="-C relocation-model=static" cargo clippy --target x86_64-unknown-none -- -D warnings
