@@ -1,9 +1,9 @@
 use core::arch::asm;
 use core::mem;
 use core::cell::UnsafeCell;
+use core::ptr::from_ref;
 
 use bitfield_struct::bitfield;
-use spin::Once;
 
 const KERNEL_STACK_SIZE: usize = 8192;
 
@@ -24,8 +24,8 @@ const ACCESS_E: u8     = 1 << 3;
 const ACCESS_RW: u8             = 1 << 1;
 /// the CPU will set this bit if the segment is accessed
 const ACCESS_A: u8       = 1 << 0;
-/// sets the type of the entry as TSS
-const ACCESS_TYPE_TSS_AVAIL: u8 = 0x9;
+/// sets the type of the entry as TSS (system segment descriptor)
+const SYSTEM_ACCESS_TYPE_TSS_AVAIL: u8 = 0x9;
 
 /// the size `limit` is scaled by. 0 means 1 bytes (i.e no scaling), 1 means 4KiB (i.e page)
 const FLAGS_GRANULARITY_4K: u8  = 1 << 3;
@@ -34,6 +34,7 @@ const FLAGS_SIZE_32: u8         = 1 << 2;
 /// support)
 const FLAGS_LONG_MODE: u8       = 1 << 1;
 
+/// NOTE temp stack for now until paging is implemented
 #[repr(C, align(16))]
 struct KernelStack(UnsafeCell<[u8; 8192]>);
 
@@ -42,11 +43,11 @@ unsafe impl Sync for KernelStack {}
 #[repr(C, packed(4))]
 #[derive(Default)]
 struct Tss {
-    reserved_1: u32,
+    reserved_0: u32,
     rsp0: u64,
     rsp1: u64,
     rsp2: u64,
-    reserved_2: u64,
+    reserved_1: u64,
     ist1: u64,
     ist2: u64,
     ist3: u64,
@@ -54,8 +55,8 @@ struct Tss {
     ist5: u64,
     ist6: u64,
     ist7: u64,
-    reserved_3: u64,
-    reserved_4: u16,
+    reserved_2: u64,
+    reserved_3: u16,
     iomap_base: u16,
 }
 
@@ -80,28 +81,29 @@ struct Gdt {
 #[bitfield(u64)]
 struct SegmentDescriptor {
     #[bits(16)]
-    limit_low: u16,
+    limit_lo: u16,
     #[bits(24)]
-    base_low: u32,
+    base_lo: u32,
     access: u8,
     #[bits(4)]
-    limit_high: u8,
+    limit_hi: u8,
     #[bits(4)]
     flags: u8,
-    base_high: u8,
+    base_hi: u8,
 }
 
-static GDT: Once<Gdt> = Once::new();
+static GDT: spin::LazyLock<Gdt> = spin::LazyLock::new(|| {
+        Gdt {
+            null: SegmentDescriptor::new32(0, 0, 0, 0),
+            kernel_code: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_0 | ACCESS_DESCR_TYPE | ACCESS_E | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_LONG_MODE),
+            kernel_data: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_0 | ACCESS_DESCR_TYPE | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_SIZE_32),
+            user_data: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_3 | ACCESS_DESCR_TYPE | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_SIZE_32),
+            user_code: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_3 | ACCESS_DESCR_TYPE | ACCESS_E | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_LONG_MODE),
+            tss: SegmentDescriptor::new64(from_ref(&*TSS) as u64, size_of::<Tss>() as u32 - 1, ACCESS_P | ACCESS_RING_0 | SYSTEM_ACCESS_TYPE_TSS_AVAIL, 0x0),
+        }
+});
 
-static TSS: Once<Tss> = Once::new();
-
-static KERNEL_STACK: KernelStack = KernelStack(UnsafeCell::new([0; 8192]));
-
-/// # Safety 
-///
-/// this function should only be called once during boot
-pub unsafe fn init_gdt() {
-    let tss = TSS.call_once(|| {
+static TSS: spin::LazyLock<Tss> = spin::LazyLock::new(|| {
         Tss {
             // the stack grows downwards, so point to the end of the array
             rsp0: KERNEL_STACK.0.get() as u64 + KERNEL_STACK_SIZE as u64,
@@ -109,27 +111,17 @@ pub unsafe fn init_gdt() {
             iomap_base: mem::size_of::<Tss>() as u16,
             ..Default::default()
         }
-    });
+});
 
-    let (tss_addr, tss_size) = (
-        tss as *const Tss as u64,
-        mem::size_of::<Tss>() as u32,
-    );
+static KERNEL_STACK: KernelStack = KernelStack(UnsafeCell::new([0; 8192]));
 
-    let gdt = GDT.call_once(|| {
-        Gdt {
-            null: SegmentDescriptor::new32(0, 0, 0, 0),
-            kernel_code: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_0 | ACCESS_DESCR_TYPE | ACCESS_E | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_LONG_MODE),
-            kernel_data: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_0 | ACCESS_DESCR_TYPE | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_SIZE_32),
-            user_data: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_3 | ACCESS_DESCR_TYPE | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_SIZE_32),
-            user_code: SegmentDescriptor::new32(0, 0xf_ffff, ACCESS_P | ACCESS_RING_3 | ACCESS_DESCR_TYPE | ACCESS_E | ACCESS_RW | ACCESS_A, FLAGS_GRANULARITY_4K | FLAGS_LONG_MODE),
-            tss: SegmentDescriptor::new64(tss_addr, tss_size-1, ACCESS_P | ACCESS_RING_0 | ACCESS_TYPE_TSS_AVAIL, 0x0),
-        }
-    });
-
+/// # Safety 
+///
+/// this function should only be called once during boot
+pub unsafe fn init_gdt() {
     let gdtr = DescriptorTablePointer {
         size: (mem::size_of::<Gdt>() - 1) as u16,
-        offset: gdt as *const Gdt as u64,
+        offset: from_ref(&*GDT) as u64,
     };
 
     unsafe {
@@ -148,12 +140,12 @@ impl SegmentDescriptor {
     #[inline]
     fn new32(base: u32, limit: u32, access: u8, flags: u8) -> Self {
         Self::new()
-            .with_limit_low(limit as u16)
-            .with_base_low(base & 0xff_ffff)
+            .with_limit_lo(limit as u16)
+            .with_base_lo(base & 0xff_ffff)
             .with_access(access)
-            .with_limit_high((limit >> 16) as u8)
+            .with_limit_hi((limit >> 16) as u8)
             .with_flags(flags & 0x0f)
-            .with_base_high((base >> 24) as u8)
+            .with_base_hi((base >> 24) as u8)
     }
 
     #[inline]
